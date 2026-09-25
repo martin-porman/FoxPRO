@@ -97,8 +97,8 @@ def run_claude_review_chunk(plan_path, chunk_id, *, model='glm-5.3-flash', max_b
     if not known:raise ValueError('Review chunk has no graph nodes')
     request=build_prompt(graph_slice,plan['question']);request['chunk']={'id':chunk_id,'kind':chunk['kind'],'coverage_rule':'Review all supplied records. Return hypotheses and evidence gaps only.'}
     prompt=SYSTEM_PROMPT+'\n\nReview request:\n'+json.dumps(request,ensure_ascii=False)
-    command=['claude','-p','--no-session-persistence','--output-format','json','--json-schema',json.dumps(REVIEW_SCHEMA,separators=(',',':')),'--model',model,'--max-budget-usd',str(max_budget_usd),prompt]
-    completed=subprocess.run(command,text=True,capture_output=True,timeout=int(timeout_seconds),check=False)
+    command=['claude','-p','--no-session-persistence','--output-format','json','--json-schema',json.dumps(REVIEW_SCHEMA,separators=(',',':')),'--model',model,'--max-budget-usd',str(max_budget_usd)]
+    completed=subprocess.run(command,input=prompt,text=True,capture_output=True,timeout=int(timeout_seconds),check=False)
     if completed.returncode != 0:
         detail=(completed.stderr or completed.stdout).strip()[-2000:]
         raise RuntimeError(f'Claude review failed for {chunk_id}: {detail}')

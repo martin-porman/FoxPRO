@@ -2,10 +2,11 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from foxpro_memory.index import build_index
 from foxpro_memory.review import build_prompt, parse_model_content, review_manifest
-from foxpro_memory.reviewer import create_review_plan, review_plan_status
+from foxpro_memory.reviewer import create_review_plan, review_plan_status, run_claude_review_chunk
 
 
 class ReviewerTests(unittest.TestCase):
@@ -34,6 +35,20 @@ class ReviewerTests(unittest.TestCase):
         self.assertEqual(manifest['adapter'],'llm-review')
         self.assertEqual(manifest['observations'][0]['confidence'],'candidate')
         self.assertIn('promotion_rule',manifest['details'])
+
+    def test_large_review_prompt_uses_standard_input(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root=Path(temporary)/'source';root.mkdir()
+            (root/'main.prg').write_text('FUNCTION Main\nRETURN 1\nENDFUNC\n')
+            db=Path(temporary)/'fixture.sqlite';build_index(root,db,project='fixture')
+            plan=create_review_plan(db,'fixture','Explain safely',Path(temporary)/'reviews',max_source_chars=20000,max_edges=100)
+            output='{"result":"{\\"summary\\":\\"gap\\",\\"candidates\\":[],\\"gaps\\":[{\\"key\\":\\"unknown\\",\\"name\\":\\"Unknown\\",\\"rationale\\":\\"need trace\\",\\"missing_evidence\\":\\"trace\\"}]}"}'
+            with patch('foxpro_memory.reviewer.subprocess.run') as run:
+                run.return_value.returncode=0;run.return_value.stdout=output;run.return_value.stderr=''
+                result=run_claude_review_chunk(plan['plan_path'],'code-00001')
+            self.assertEqual(result['gap_count'],1)
+            self.assertNotIn('Review request:',run.call_args.args[0])
+            self.assertIn('Review request:',run.call_args.kwargs['input'])
 
 
 if __name__=='__main__':
