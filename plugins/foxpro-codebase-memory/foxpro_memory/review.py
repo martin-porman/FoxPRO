@@ -24,7 +24,11 @@ def build_prompt(graph_slice, question):
     return {
         'question': question,
         'graph_slice': {
-            'units': [{'id': unit['id'], 'unit_key': unit['unit_key'], 'owner': unit['owner'], 'provenance': unit.get('provenance', {}), 'source': unit['source']} for unit in graph_slice.get('units', [])],
+            # Provenance is preserved in the local evidence graph and final
+            # manifest.  It is intentionally excluded from provider prompts:
+            # absolute paths and extraction metadata can dominate a small
+            # source shard without helping a model assess its logic.
+            'units': [{'id': unit['id'], 'unit_key': unit['unit_key'], 'owner': unit['owner'], 'source': unit['source']} for unit in graph_slice.get('units', [])],
             'nodes': [{'id': node['id'], 'kind': node['kind'], 'name': node['name'], 'start_line': node.get('start_line'), 'end_line': node.get('end_line'), 'evidence_id': node.get('evidence_id')} for node in graph_slice['nodes']],
             'edges': [{'source_id': edge['source_id'], 'target_id': edge['target_id'], 'kind': edge['kind'], 'status': edge['status'], 'confidence': edge['confidence'], 'evidence_id': edge.get('evidence_id')} for edge in graph_slice['edges']],
             'limitations': graph_slice.get('limitations'),

@@ -45,10 +45,13 @@ def _read_claude_envelope(path):
     raise ValueError('Claude output is not valid UTF-8 or UTF-16 JSON')
 
 
-def create_review_plan(db_path, project, question, output_root, max_source_chars=20000, max_edges=250):
+def create_review_plan(db_path, project, question, output_root, max_source_chars=4000, max_edges=25):
     """Queue every nonempty source unit and every graph edge exactly once."""
-    max_source_chars=max(20000, min(int(max_source_chars), 1000000))
-    max_edges=max(100, min(int(max_edges), 20000))
+    # Model response time depends on the surrounding node metadata as well as
+    # the source text.  Keep default slices small enough to recover and resume
+    # reliably from a VM worker.
+    max_source_chars=max(2000, min(int(max_source_chars), 1000000))
+    max_edges=max(10, min(int(max_edges), 20000))
     metadata=_read_metadata(db_path)
     if metadata.get('project') != project:
         raise ValueError('Review project does not match graph database metadata')
