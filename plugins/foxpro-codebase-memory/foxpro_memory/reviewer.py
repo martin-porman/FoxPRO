@@ -186,10 +186,16 @@ def start_vm_review_chunk(plan_path, chunk_id, *, ssh_target, remote_root, doten
         local_prompt=Path(temporary)/'prompt.txt';local_prompt.write_text(prompt,encoding='utf-8')
         copied=subprocess.run(['scp',str(local_prompt),f'{ssh_target}:{remote_prompt}'],text=True,capture_output=True,timeout=120,check=False)
         if copied.returncode:raise RuntimeError('Unable to upload VM review shard: '+(copied.stderr or copied.stdout).strip()[-1000:])
-    command=['ssh',ssh_target,'powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',remote_root+'/start-vm-glm-review.ps1','-RunnerPath',remote_root+'/run-review.ps1','-PromptFile',remote_prompt,'-OutputFile',remote_output,'-DotenvPath',dotenv_path,'-Model',model,'-MaxBudgetUsd',str(max_budget_usd)]
-    started=subprocess.run(command,text=True,capture_output=True,timeout=60,check=False)
-    if started.returncode:raise RuntimeError('Unable to start VM review shard: '+(started.stderr or started.stdout).strip()[-1000:])
-    return {'job_id':job_id,'chunk_id':chunk_id,'state':'running','remote_output':remote_output,'executor':'credential-isolated-vm'}
+    # Windows OpenSSH ends children detached with Start-Process when the SSH
+    # command exits. Keep the SSH runner foregrounded in a local child instead;
+    # the VM-side Claude process continues independently and writes the known
+    # result path that the collector polls.
+    command=['ssh',ssh_target,'powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',remote_root+'/run-review.ps1','-PromptFile',remote_prompt,'-OutputFile',remote_output,'-DotenvPath',dotenv_path,'-Model',model,'-MaxBudgetUsd',str(max_budget_usd)]
+    try:
+        started=subprocess.Popen(command,stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)
+    except OSError as exc:
+        raise RuntimeError('Unable to start VM review shard: '+str(exc)) from exc
+    return {'job_id':job_id,'chunk_id':chunk_id,'state':'running','remote_output':remote_output,'launcher_pid':started.pid,'executor':'credential-isolated-vm'}
 
 
 def collect_vm_review_chunk(plan_path, chunk_id, *, ssh_target, remote_root, model='glm-5.3-flash'):
@@ -204,6 +210,8 @@ def collect_vm_review_chunk(plan_path, chunk_id, *, ssh_target, remote_root, mod
         retrieved=subprocess.run(['scp',f'{ssh_target}:{remote_output}',str(local_result)],text=True,capture_output=True,timeout=120,check=False)
         if retrieved.returncode:raise RuntimeError('Unable to retrieve VM review result: '+(retrieved.stderr or retrieved.stdout).strip()[-1000:])
         envelope=_read_claude_envelope(local_result)
+    if isinstance(envelope, dict) and envelope.get('is_error'):
+        raise RuntimeError('VM Claude review failed for '+chunk_id+': '+str(envelope.get('result','unknown provider error'))[-2000:])
     content=envelope.get('result') if isinstance(envelope,dict) else None
     response=parse_model_content(content)
     manifest=review_manifest(response,artifact_path=str(Path(plan_path).expanduser().resolve()),artifact_sha256=plan['plan_sha256'],tool_version=model,question=plan['question'],known_node_ids=known)

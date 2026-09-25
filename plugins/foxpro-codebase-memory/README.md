@@ -18,7 +18,7 @@ For recovery work, install the official Z.ai Coding Tool Helper and Claude Code 
 
 Use start_llm_review_vm_chunk to launch a longer job and collect_llm_review_vm_chunk to retrieve it later. This keeps the review process inside the VM even when a host tool call has a shorter time limit.
 
-The Windows worker follows the Z.ai Coding Tool Helper configuration. It supports both a named key and a one-line token file, uses Git Bash when Claude Code requires it, and reads UTF-8 or UTF-16 Claude output.
+The Windows worker follows the Z.ai Coding Tool Helper configuration. It supports both a named key and a one-line token file, uses Git Bash when Claude Code requires it, and reads UTF-8 or UTF-16 Claude output. VM jobs use a host-side SSH launcher because Windows OpenSSH terminates PowerShell children created with `Start-Process`; results remain in the VM for safe collection.
 
 The plugin is a companion to `codebase-memory-mcp`. It does not replace or modify the installed generic indexer.
 
