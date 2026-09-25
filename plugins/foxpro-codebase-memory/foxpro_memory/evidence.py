@@ -12,7 +12,8 @@ import json
 
 MANIFEST_VERSION = 1
 MAX_MANIFEST_BYTES = 16 * 1024 * 1024
-SUPPORTED_ADAPTERS = frozenset({'foxlift', 'foxbin2prg', 'profile-explorer', 'refox', 'manual'})
+SUPPORTED_ADAPTERS = frozenset({'foxlift', 'foxbin2prg', 'profile-explorer', 'refox', 'llm-review', 'manual'})
+CONFIDENCE = frozenset({'observed', 'hash-match', 'partial', 'candidate', 'unresolved'})
 
 
 def _digest(data):
@@ -73,7 +74,10 @@ def load_manifests(paths):
             if key in known:
                 raise ValueError(f'Duplicate observation key in {path}: {key}')
             known.add(key)
-            observations.append({'manifest_sha256': identifier, 'key': key, 'kind': _string(item.get('kind'), f'observations[{index}].kind'), 'name': _string(item.get('name'), f'observations[{index}].name'), 'location': item.get('location', {}), 'details': item.get('details', {}), 'confidence': item.get('confidence', 'observed')})
+            confidence = item.get('confidence', 'observed')
+            if confidence not in CONFIDENCE:
+                raise ValueError(f'observations[{index}].confidence is unsupported')
+            observations.append({'manifest_sha256': identifier, 'key': key, 'kind': _string(item.get('kind'), f'observations[{index}].kind'), 'name': _string(item.get('name'), f'observations[{index}].name'), 'location': item.get('location', {}), 'details': item.get('details', {}), 'confidence': confidence})
         raw_links = manifest.get('links', [])
         if not isinstance(raw_links, list):
             raise ValueError('links must be an array')
@@ -83,5 +87,8 @@ def load_manifests(paths):
             target = _string(item.get('target'), f'links[{index}].target')
             if source not in known or target not in known:
                 raise ValueError(f'links[{index}] references an unknown observation key')
-            links.append({'manifest_sha256': identifier, 'source': source, 'target': target, 'kind': _string(item.get('kind'), f'links[{index}].kind'), 'details': item.get('details', {}), 'confidence': item.get('confidence', 'observed')})
+            confidence = item.get('confidence', 'observed')
+            if confidence not in CONFIDENCE:
+                raise ValueError(f'links[{index}].confidence is unsupported')
+            links.append({'manifest_sha256': identifier, 'source': source, 'target': target, 'kind': _string(item.get('kind'), f'links[{index}].kind'), 'details': item.get('details', {}), 'confidence': confidence})
     return {'manifests': manifests, 'observations': observations, 'links': links}

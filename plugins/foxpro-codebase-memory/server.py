@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import sys
 
-VERSION = '0.2.1'
+VERSION = '0.3.0'
 PROTOCOLS = ('2024-11-05', '2025-03-26')
 STR = {'type': 'string'}
 PROJECT = {'type': 'string', 'pattern': '^[a-z0-9][a-z0-9_-]{0,63}$', 'default': 'joosep'}
@@ -26,6 +26,10 @@ TOOLS = [
     tool('query_graph', 'Query CPG-style source, object, data-access and imported-evidence nodes and edges. Results retain status and evidence.', {'project': PROJECT, 'kind': STR, 'edge_kind': STR, 'name_pattern': STR, 'evidence_kind': STR, 'status': {'type': 'string', 'enum': ['resolved', 'partial', 'unresolved', 'observed']}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 1000}, 'offset': {'type': 'integer', 'minimum': 0, 'maximum': 1000000}}),
     tool('trace_graph', 'Traverse every graph layer from a node, including partial and unresolved relations.', {'project': PROJECT, 'node_id': STR, 'direction': {'type': 'string', 'enum': ['inbound', 'outbound', 'both']}, 'depth': {'type': 'integer', 'minimum': 0, 'maximum': 8}}, ('node_id',)),
     tool('get_evidence', 'Return the artifact, extractor/trace observation and incident graph edges for one graph node.', {'project': PROJECT, 'node_id': STR}, ('node_id',)),
+    tool('create_llm_review_plan', 'Create a deterministic queue covering every indexed source unit and graph edge for Claude Code configured with GLM. The plan emits candidate evidence only.', {'project': PROJECT, 'question': STR, 'output_root': STR, 'max_source_chars': {'type': 'integer', 'minimum': 20000, 'maximum': 1000000}, 'max_edges': {'type': 'integer', 'minimum': 100, 'maximum': 20000}}, ('question',)),
+    tool('get_llm_review_status', 'Show every deterministic GLM review shard and whether its candidate-evidence manifest exists. This does not contact a provider.', {'project': PROJECT, 'plan_path': STR}, ('plan_path',)),
+    tool('run_llm_review_chunk', 'Run one planned Claude Code / GLM review shard. It uses the caller-configured CLI credentials and writes an untrusted candidate-evidence manifest; it never promotes graph edges to observed.', {'project': PROJECT, 'plan_path': STR, 'chunk_id': STR, 'model': STR, 'max_budget_usd': {'type': 'number', 'minimum': 0.01, 'maximum': 10}, 'timeout_seconds': {'type': 'integer', 'minimum': 30, 'maximum': 1800}}, ('plan_path','chunk_id')),
+    tool('run_llm_review_batch', 'Run up to 20 pending Claude Code / GLM review shards sequentially. Each shard has its own explicit maximum budget; use get_llm_review_status between batches. All output remains candidate evidence.', {'project': PROJECT, 'plan_path': STR, 'max_chunks': {'type': 'integer', 'minimum': 1, 'maximum': 20}, 'model': STR, 'max_budget_usd': {'type': 'number', 'minimum': 0.01, 'maximum': 10}, 'timeout_seconds': {'type': 'integer', 'minimum': 30, 'maximum': 1800}}, ('plan_path',)),
     tool('check_index_coverage', 'Inspect input files, extraction failures and parser gaps before relying on graph evidence.', {'project': PROJECT, 'paths': {'type': 'array', 'items': STR}, 'scopes': {'type': 'array', 'items': STR}}),
 ]
 
@@ -59,6 +63,8 @@ def validate(name, arguments):
             raise ValueError(key + ' must be a nonempty string')
         if kind == 'integer' and (type(value) is not int or value < rule.get('minimum', value) or value > rule.get('maximum', value)):
             raise ValueError(key + ' is outside the accepted integer range')
+        if kind == 'number' and (type(value) not in (int,float) or value < rule.get('minimum', value) or value > rule.get('maximum', value)):
+            raise ValueError(key + ' is outside the accepted numeric range')
         if kind == 'array' and (not isinstance(value, list) or any(not isinstance(x, str) or not x.strip() for x in value)):
             raise ValueError(key + ' must be an array of nonempty strings')
         if 'enum' in rule and value not in rule['enum']:
@@ -69,6 +75,7 @@ def invoke(name, arguments):
     args = validate(name, arguments)
     # Lazy import keeps initialize/tool discovery available even if an index is absent.
     from foxpro_memory.index import Graph, build_index
+    from foxpro_memory.reviewer import create_review_plan, review_plan_status, run_claude_review_batch, run_claude_review_chunk
     if name == 'list_projects':
         results = []
         for path in sorted(cache_root().glob('*.sqlite')):
@@ -82,6 +89,15 @@ def invoke(name, arguments):
     path = project_path(project)
     if name == 'index_repository':
         return build_index(args['source_root'], path, project=project, extra_roots=args.get('extra_roots'), evidence_paths=args.get('evidence_paths'))
+    if name == 'create_llm_review_plan':
+        if not path.is_file():raise ValueError('Project is not indexed: ' + project + '. Use index_repository first.')
+        return create_review_plan(path,project,args['question'],args.get('output_root',str(cache_root().parent/'reviews')),args.get('max_source_chars',400000),args.get('max_edges',5000))
+    if name == 'run_llm_review_chunk':
+        return run_claude_review_chunk(args['plan_path'],args['chunk_id'],model=args.get('model','glm-5.3-flash'),max_budget_usd=args.get('max_budget_usd',0.25),timeout_seconds=args.get('timeout_seconds',900))
+    if name == 'get_llm_review_status':
+        return review_plan_status(args['plan_path'])
+    if name == 'run_llm_review_batch':
+        return run_claude_review_batch(args['plan_path'],max_chunks=args.get('max_chunks',1),model=args.get('model','glm-5.3-flash'),max_budget_usd=args.get('max_budget_usd',0.25),timeout_seconds=args.get('timeout_seconds',900))
     if not path.is_file():
         raise ValueError('Project is not indexed: ' + project + '. Use index_repository first.')
     graph = Graph(path)

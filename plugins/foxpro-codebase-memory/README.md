@@ -2,6 +2,14 @@
 
 Local, dependency-free evidence-graph indexing for Visual FoxPro recovery work. It reads source files and VFP source containers without running Visual FoxPro, and writes SQLite indexes only under `~/.cache/foxpro-codebase-memory/indexes` unless `FOXPRO_MEMORY_CACHE` is set.
 
+## GLM evidence review queue
+
+`create_llm_review_plan` creates a deterministic queue that covers every indexed nonempty source unit and every graph edge exactly once. `run_llm_review_chunk` sends one bounded shard to the locally configured `claude -p` CLI with model `glm-5.3-flash`, then writes an `llm-review` evidence manifest beside the plan. `get_llm_review_status` and `run_llm_review_batch` make a full pass resumable; a batch runs at most 20 shards and applies the configured spend ceiling to each shard.
+
+The configured provider receives the code in the selected shard. The reviewer produces only candidate relationships and evidence gaps: it cannot change a resolved edge, establish a runtime fact, or turn a dynamic VFP expression into a proven target. Import generated manifests with a new `index_repository` run together with the existing evidence manifests when the candidates need to appear in a graph generation.
+
+Use C-like pseudocode only inside a reviewer explanation when it makes control flow easier to read. The canonical recovery artifact remains the provenance graph and original VFP source; the implementation destination is TypeScript.
+
 The plugin is a companion to `codebase-memory-mcp`. It does not replace or modify the installed generic indexer.
 
 ## Indexed inputs

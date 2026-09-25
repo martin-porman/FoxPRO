@@ -51,6 +51,13 @@ def build_index(source_root, db_path, project='joosep', extra_roots=None, eviden
         def add_graph_edge(edge_id, source_id, target_id, kind, status, confidence, evidence_id=None, details=None):
             db.execute('INSERT INTO graph_edges VALUES(?,?,?,?,?,?,?,?)', (edge_id, source_id, target_id, kind, status, confidence, evidence_id, js(details or {})))
 
+        def confidence_status(confidence):
+            if confidence in {'observed', 'hash-match'}:
+                return 'observed'
+            if confidence in {'partial', 'candidate'}:
+                return 'partial'
+            return 'unresolved'
+
         external = load_manifests(evidence_paths)
         units={};files={};symbols=[];pending=[];objects=[];fingerprints=[];parser_versions=set();symbol_evidence={};file_nodes={};unit_nodes={}
         for root in roots:
@@ -229,10 +236,17 @@ def build_index(source_root, db_path, project='joosep', extra_roots=None, eviden
                 db.execute('INSERT INTO evidence VALUES(?,?,?,?,?,?,?,?)',(observation_evidence,external_artifact,observation['kind'],manifest['tool_name'],manifest['tool_version'],js(observation['location']),js(observation['details']),observation['confidence']))
                 node_id=ident(external_artifact,'observation',observation['key']);external_nodes[(manifest['sha256'],observation['key'])]=node_id
                 add_node(node_id,file_id=matching_file['id'] if matching_file else None,kind='External:'+observation['kind'],name=observation['name'],evidence_id=observation_evidence,details={'adapter':manifest['adapter'],'location':observation['location'],'details':observation['details']})
-                add_graph_edge(ident(node_id,'observed-in'),node_id,artifact_node,'OBSERVED_IN','resolved',observation['confidence'],observation_evidence,{})
+                add_graph_edge(ident(node_id,'observed-in'),node_id,artifact_node,'OBSERVED_IN',confidence_status(observation['confidence']),observation['confidence'],observation_evidence,{})
+                if manifest['adapter']=='llm-review' and observation['kind']=='CandidateRelationship':
+                    for source_id in observation['details'].get('source_node_ids',[]):
+                        if db.execute('SELECT 1 FROM graph_nodes WHERE id=?',(source_id,)).fetchone():
+                            add_graph_edge(ident(node_id,'candidate-source',source_id),source_id,node_id,'LLM_CANDIDATE_SOURCE','partial','candidate',observation_evidence,{'promotion_rule':'Requires independent source or trace evidence'})
+                    for target_id in observation['details'].get('target_node_ids',[]):
+                        if db.execute('SELECT 1 FROM graph_nodes WHERE id=?',(target_id,)).fetchone():
+                            add_graph_edge(ident(node_id,'candidate-target',target_id),node_id,target_id,'LLM_CANDIDATE_TARGET','partial','candidate',observation_evidence,{'promotion_rule':'Requires independent source or trace evidence'})
         for link in external['links']:
             source=external_nodes[(link['manifest_sha256'],link['source'])];target=external_nodes[(link['manifest_sha256'],link['target'])]
-            add_graph_edge(ident(link['manifest_sha256'],'link',link['source'],link['target'],link['kind']),source,target,link['kind'],'observed',link['confidence'],None,link['details'])
+            add_graph_edge(ident(link['manifest_sha256'],'link',link['source'],link['target'],link['kind']),source,target,link['kind'],confidence_status(link['confidence']),link['confidence'],None,link['details'])
         fingerprint=ident(SCHEMA_VERSION,sorted(parser_versions),js(fingerprints))
         metadata={'schema_version':SCHEMA_VERSION,'project':project,'roots':[str(r) for r in roots],'evidence_paths':[m['path'] for m in external['manifests']],'generation':datetime.now(timezone.utc).isoformat(),'graph_fingerprint':fingerprint,'parser_versions':sorted(parser_versions),'reference_coverage':'non-exhaustive static extraction plus explicit external-tool evidence; unresolved dynamic behavior is retained and no layer is a proof of runtime behavior without a trace.'}
         db.executemany('INSERT INTO metadata VALUES(?,?)',[(k,js(v)) for k,v in metadata.items()]);db.commit();db.close();os.replace(temp,destination)
