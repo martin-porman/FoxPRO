@@ -1,0 +1,25 @@
+{
+  "name": "foxpro-codebase-memory",
+  "version": "0.1.0",
+  "description": "Local Visual FoxPro source graph with original-record provenance and explicit coverage gaps.",
+  "author": {
+    "name": "Martin Porman"
+  },
+  "skills": "./skills/",
+  "interface": {
+    "displayName": "FoxPro Codebase Memory",
+    "shortDescription": "Explore FoxPro source, objects and call relationships.",
+    "longDescription": "Indexes Visual FoxPro programs and binary form/class source into a local persistent graph. Includes source snippets, call tracing, provenance and unresolved-reference reporting for legacy modernization.",
+    "developerName": "Martin Porman",
+    "category": "Productivity",
+    "capabilities": [
+      "Read"
+    ],
+    "defaultPrompt": [
+      "Index the Joosep FoxPro source and show coverage.",
+      "Trace this FoxPro method and show original evidence.",
+      "Map a Joosep workflow before its TypeScript migration."
+    ]
+  },
+  "mcpServers": "./.mcp.json"
+}

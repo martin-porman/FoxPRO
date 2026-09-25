@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "foxpro-codebase-memory": {
+      "command": "./server.py",
+      "args": [],
+      "cwd": "${PLUGIN_ROOT}"
+    }
+  }
+}
