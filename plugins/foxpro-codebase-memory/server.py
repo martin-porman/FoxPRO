@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import sys
 
-VERSION = '0.1.0'
+VERSION = '0.2.0'
 PROTOCOLS = ('2024-11-05', '2025-03-26')
 STR = {'type': 'string'}
 PROJECT = {'type': 'string', 'pattern': '^[a-z0-9][a-z0-9_-]{0,63}$', 'default': 'joosep'}
@@ -16,13 +16,16 @@ def tool(name, description, properties=None, required=()):
     return {'name': name, 'description': description, 'inputSchema': {'type': 'object', 'properties': properties or {}, 'required': list(required), 'additionalProperties': False}}
 
 TOOLS = [
-    tool('index_repository', 'Build a native Visual FoxPro index; originals are read-only. Writes only the selected project cache. Dynamic references stay unresolved.', {'project': PROJECT, 'source_root': STR, 'extra_roots': {'type': 'array', 'items': STR}}, ('source_root',)),
+    tool('index_repository', 'Build a provenance-first Visual FoxPro evidence graph. Originals are read-only; imported extractor and trace manifests remain distinct evidence layers.', {'project': PROJECT, 'source_root': STR, 'extra_roots': {'type': 'array', 'items': STR}, 'evidence_paths': {'type': 'array', 'items': STR}}, ('source_root',)),
     tool('list_projects', 'List locally cached Visual FoxPro projects and index generations.'),
     tool('index_status', 'Show generation, original roots, counts and coverage limitations.', {'project': PROJECT}),
     tool('get_architecture', 'Summarize indexed symbol/file/reference types and roots; this is a structural inventory, not inferred business architecture.', {'project': PROJECT}),
     tool('search_graph', 'Find native VFP symbols. Paginate until has_more is false when requiring exhaustive results.', {'project': PROJECT, 'query': STR, 'name_pattern': STR, 'label': STR, 'path': STR, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 1000}, 'offset': {'type': 'integer', 'minimum': 0}}),
     tool('trace_path', 'Trace statically resolved references and report unresolved calls separately.', {'project': PROJECT, 'symbol_id': STR, 'direction': {'type': 'string', 'enum': ['inbound', 'outbound', 'both']}, 'depth': {'type': 'integer', 'minimum': 0, 'maximum': 8}}, ('symbol_id',)),
     tool('get_code_snippet', 'Read original VFP symbol text with file hash and record/memo provenance.', {'project': PROJECT, 'symbol_id': STR}, ('symbol_id',)),
+    tool('query_graph', 'Query CPG-style source, object, data-access and imported-evidence nodes and edges. Results retain status and evidence.', {'project': PROJECT, 'kind': STR, 'edge_kind': STR, 'name_pattern': STR, 'evidence_kind': STR, 'status': {'type': 'string', 'enum': ['resolved', 'partial', 'unresolved', 'observed']}, 'limit': {'type': 'integer', 'minimum': 1, 'maximum': 1000}, 'offset': {'type': 'integer', 'minimum': 0, 'maximum': 1000000}}),
+    tool('trace_graph', 'Traverse every graph layer from a node, including partial and unresolved relations.', {'project': PROJECT, 'node_id': STR, 'direction': {'type': 'string', 'enum': ['inbound', 'outbound', 'both']}, 'depth': {'type': 'integer', 'minimum': 0, 'maximum': 8}}, ('node_id',)),
+    tool('get_evidence', 'Return the artifact, extractor/trace observation and incident graph edges for one graph node.', {'project': PROJECT, 'node_id': STR}, ('node_id',)),
     tool('check_index_coverage', 'Inspect input files, extraction failures and parser gaps before relying on graph evidence.', {'project': PROJECT, 'paths': {'type': 'array', 'items': STR}, 'scopes': {'type': 'array', 'items': STR}}),
 ]
 
@@ -78,11 +81,11 @@ def invoke(name, arguments):
     project = args.pop('project', 'joosep')
     path = project_path(project)
     if name == 'index_repository':
-        return build_index(args['source_root'], path, project=project, extra_roots=args.get('extra_roots'))
+        return build_index(args['source_root'], path, project=project, extra_roots=args.get('extra_roots'), evidence_paths=args.get('evidence_paths'))
     if not path.is_file():
         raise ValueError('Project is not indexed: ' + project + '. Use index_repository first.')
     graph = Graph(path)
-    return getattr(graph, 'index_status' if name == 'get_architecture' else name)(**args)
+    return getattr(graph, name)(**args)
 
 def error(identifier, code, message):
     return {'jsonrpc': '2.0', 'id': identifier, 'error': {'code': code, 'message': message}}

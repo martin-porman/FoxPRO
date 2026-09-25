@@ -1,6 +1,6 @@
 # FoxPro Codebase Memory
 
-Local, dependency-free structural indexing for Visual FoxPro recovery work. It reads source files and VFP source containers without running Visual FoxPro, and writes SQLite indexes only under `~/.cache/foxpro-codebase-memory/indexes` unless `FOXPRO_MEMORY_CACHE` is set.
+Local, dependency-free evidence-graph indexing for Visual FoxPro recovery work. It reads source files and VFP source containers without running Visual FoxPro, and writes SQLite indexes only under `~/.cache/foxpro-codebase-memory/indexes` unless `FOXPRO_MEMORY_CACHE` is set.
 
 The plugin is a companion to `codebase-memory-mcp`. It does not replace or modify the installed generic indexer.
 
@@ -11,6 +11,18 @@ The plugin is a companion to `codebase-memory-mcp`. It does not replace or modif
 - Other files as explicit opaque coverage records
 
 Form and library source retains original path, hash, record number, memo block/range, object identity, class metadata, and decoding warnings. Customer DBF rows are never decoded as application source.
+
+## Graph layers
+
+Version 0.2 adds a provenance-first graph on top of the original conservative symbol index:
+
+- source artifacts, extracted units, form/class objects, symbols and statements;
+- lexical syntax containment plus partial control-flow (`NEXT`, `BRANCH_OR_BODY`);
+- lexical variable declarations, reads and writes; explicit `USE`, SQL and work-area data access observations;
+- resolved and unresolved call, class, file and form references;
+- imported observations from ReFox+, FoxLift, FoxBin2Prg and Profile Explorer/ETW.
+
+Every node and edge retains a status, confidence and evidence record. `partial` means a lexical relationship is present but executable behavior is not proved; `unresolved` means the target must not be guessed. Runtime truth requires a trace observation.
 
 ## Using it
 
@@ -25,9 +37,10 @@ Restart Codex or start a new task after installation. The plugin runs entirely l
 
 Use the MCP tools:
 
-1. `index_repository` with a source root and a lowercase project name.
-2. `index_status` and `check_index_coverage` before relying on results.
-3. `search_graph`, `get_code_snippet`, and `trace_path` for evidence-backed exploration.
+1. `index_repository` with a source root, a lowercase project name, and optional `evidence_paths`.
+2. `index_status`, `get_architecture`, and `check_index_coverage` before relying on results.
+3. Use `search_graph`, `get_code_snippet`, and `trace_path` for the conservative source graph.
+4. Use `query_graph`, `trace_graph`, and `get_evidence` for cross-layer source, extractor and trace evidence.
 
 The equivalent command line interface is:
 
@@ -43,3 +56,23 @@ Indexes are stored below `~/.cache/foxpro-codebase-memory/indexes/` by default. 
 This is a conservative lexical structural parser. It resolves only proven lexical, file, or explicit-library relationships. Macro substitution, `EVALUATE`, unknown receivers, runtime code and ambiguous targets remain unresolved. A coverage result with no recorded issue is not a proof of runtime behavior or complete static resolution.
 
 The main Windows binaries remain opaque when their container structure cannot be recovered. Their files and hashes are retained as coverage evidence rather than being claimed as indexed code.
+
+## External evidence manifests
+
+The plugin deliberately does not bundle or execute external decompilers, Windows tools, or ETW collection. They have separate licenses and platform requirements. Instead, pass a JSON manifest through `evidence_paths` when building an index. Supported adapters are `refox`, `foxlift`, `foxbin2prg`, `profile-explorer`, and `manual`.
+
+```json
+{
+  "schema_version": 1,
+  "adapter": "refox",
+  "tool": {"name": "ReFox+", "version": "11.54"},
+  "artifact": {"path": "/evidence/joosep5prg.exe", "sha256": "64-hex-sha256"},
+  "observations": [
+    {"key": "inventory", "kind": "ProgramInventory", "name": "main.fxp", "location": {"entrypoint": "main.fxp"}, "details": {"included_file_count": 1570}},
+    {"key": "dynamic", "kind": "DynamicExpression", "name": "EVALUATE", "location": {}, "details": {"target": "unknown"}, "confidence": "unresolved"}
+  ],
+  "links": [{"source": "inventory", "target": "dynamic", "kind": "CONTAINS"}]
+}
+```
+
+The artifact hash links a tool observation to the original file only when both the path and hash match an indexed artifact. A manifest can describe an unindexed artifact, but the graph marks it as a separate external artifact.

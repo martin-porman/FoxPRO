@@ -48,6 +48,7 @@ class ServerIntegrationTests(unittest.TestCase):
         self.process.stdin.flush()
         tools = self.request('tools/list')['result']['tools']
         self.assertIn('get_code_snippet', {t['name'] for t in tools})
+        self.assertTrue({'query_graph', 'trace_graph', 'get_evidence'}.issubset({t['name'] for t in tools}))
         self.call('index_repository', {'source_root': str(self.source), 'project': 'fixture'})
         found = self.call('search_graph', {'project': 'fixture', 'query': 'addone'})
         self.assertEqual(found['total'], 1)
@@ -58,6 +59,13 @@ class ServerIntegrationTests(unittest.TestCase):
         self.assertEqual(len(snippet['provenance']['original_sha256']), 64)
         trace = self.call('trace_path', {'project': 'fixture', 'symbol_id': symbol, 'direction': 'inbound'})
         self.assertGreaterEqual(len(trace['edges']), 1)
+        architecture = self.call('get_architecture', {'project': 'fixture'})
+        self.assertGreater(architecture['counts']['graph_nodes'], architecture['counts']['symbols'])
+        graph = self.call('query_graph', {'project': 'fixture', 'name_pattern': 'RETURN'})
+        self.assertGreaterEqual(graph['total_nodes'], 1)
+        node = graph['nodes'][0]['id']
+        self.assertTrue(self.call('get_evidence', {'project': 'fixture', 'node_id': node})['evidence'])
+        self.assertTrue(self.call('trace_graph', {'project': 'fixture', 'node_id': node, 'direction': 'both'})['nodes'])
         self.assertEqual(len(self.call('list_projects')['projects']), 1)
         coverage = self.call('check_index_coverage', {'project': 'fixture', 'paths': ['missing.prg']})
         self.assertEqual(coverage['missing_paths'], ['missing.prg'])

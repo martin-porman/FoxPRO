@@ -6,6 +6,7 @@ resolution, confidence and cross-file identity belong to the graph builder.
 import re
 
 PARSER_VERSION = 'vfp-lexical-1.0.0'
+CPG_VERSION = 'vfp-lexical-cpg-2.0.0'
 # These cannot safely be resolved by matching a user routine's short name.
 BUILTINS = frozenset('ABS ACOPY ADATABASES ADBOBJECTS ADDBS ADEL AERROR AFIELDS AGETCLASS AINS ALEN ALLTRIM AMEMBERS ASC ASCAN ASORT AT ATC ATLINE ATCLINE BETWEEN BOF CDOW CEILING CHR CHRTRAN CMONTH CNTBAR COL COMPOBJ COS CREATEOBJECT CTOD CTOT CURDIR CURSORGETPROP CURSORSETPROP DATE DATETIME DAY DBF DBGETPROP DBSETPROP DELETED DIRECTORY DMY DODEFAULT DTOC DTOR DTOS DTOT EMPTY EOF ERROR EVALUATE EVL EXP FCOUNT FCREATE FCLOSE FEOF FGETS FIELD FILE FILETOSTR FLUSH FLOOR FOPEN FPUTS FREAD FSEEK FULLPATH FV FWRITE GETENV GETFILE GETPEM GETWORDCOUNT GETWORDNUM GOMONTH HOUR ICASE IIF INDBC INKEY INLIST INT ISALPHA ISBLANK ISDIGIT ISEXCLUSIVE ISFLOCKED ISLEADBYTE ISLOWER ISMEMOFETCH ISNULL ISPEN ISREADONLY ISRLOCKED ISUPPER JUSTDRIVE JUSTEXT JUSTFNAME JUSTPATH JUSTSTEM LEFT LEN LIKE LINENO LOCK LOG LOG10 LOWER LTRIM MAX MDX MESSAGE MIN MINUTE MOD MONTH MROW NCOLS NEWOBJECT NOFILTER NVL OCCURS OS PADL PADR PADC PARAMETERS PCOUNT PEMSTATUS PI PROGRAM RAT RATLINE RECCOUNT RECNO RECSIZE REPLICATE RGB RIGHT RLOCK ROUND RTRIM SECOND SECONDS SEEK SELECT SET SIGN SIN SKPBAR SPACE SQLCANCEL SQLCOLUMNS SQLCOMMIT SQLCONNECT SQLDISCONNECT SQLEXEC SQLGETPROP SQLIDLEDISCONNECT SQLMORERESULTS SQLPREPARE SQLROLLBACK SQLSETPROP SQLSTRINGCONNECT SQLTABLES SQRT STOD STR STRCONV STRTOFILE STRTRAN STUFF SUBSTR SYS TAN TIME TRANSFORM TRIM TTOC TTOD TYPE UPPER USED VAL VARTYPE WEEK WEXIST YEAR'.split())
 _IDENT = re.compile(r'[A-Za-z_\u0080-\uffff][\w\u0080-\uffff]*(?:\.[A-Za-z_\u0080-\uffff][\w\u0080-\uffff]*)*')
@@ -157,3 +158,117 @@ def parse_source(text: str, *, module: str = '', owner: str = '') -> dict:
     if with_depth:issue(1,total,'Unclosed WITH block')
     if conditional_depth:issue(1,total,'Unclosed conditional compilation block')
     return {'symbols':symbols,'references':refs,'issues':issues,'parser_version':PARSER_VERSION}
+
+
+def lexical_cpg(text: str) -> dict:
+    """Build a deliberately partial CPG layer from readable VFP source.
+
+    This is evidence of lexical structure, not a claim that every branch or
+    variable access can execute.  In particular, macro expansion, SQL strings,
+    member receivers, and preprocessor decisions stay explicitly marked as
+    unknown.  The graph builder stores these observations beside the existing
+    conservative symbol/reference graph.
+    """
+    statements = []
+    variables = []
+    data_accesses = []
+    issues = []
+    pending = []
+    pending_start = 1
+    text_start = None
+    keywords = frozenset('AS AND ARRAY BY CASE DECLARE DEFAULT DELETE DIMENSION DO ELSE ELSEIF ENDCASE ENDDEFINE ENDDO ENDFOR ENDFUNC ENDIF ENDPROC ENDPROCEDURE ENDSCAN ENDTEXT EXIT FOR FROM FUNCTION IF IN INSERT INTO LPARAMETERS LOCAL LOOP NEXT NOT OF OR PARAMETERS PRIVATE PROCEDURE PUBLIC REPLACE RETURN SCAN SELECT THEN TO UPDATE USE WHERE WHILE WITH ENDWITH'.split())
+
+    def emit(start, end, tokens):
+        if not tokens:
+            return
+        first = tokens[0][1].upper() if tokens[0][0] == 'id' else tokens[0][1]
+        kind = 'Statement'
+        if first in {'IF', 'ELSEIF', 'ELSE', 'ENDIF', 'DO', 'CASE', 'ENDCASE', 'FOR', 'ENDFOR', 'SCAN', 'ENDSCAN', 'WHILE', 'ENDDO'}:
+            kind = 'Control'
+        elif first in {'RETURN', 'EXIT', 'LOOP'}:
+            kind = 'Terminal'
+        elif first in {'FUNCTION', 'PROCEDURE', 'DEFINE', 'ENDDEFINE', 'ENDPROC', 'ENDPROCEDURE', 'ENDFUNC', 'ENDFUNCTION'}:
+            kind = 'Declaration'
+        elif first in {'USE', 'SELECT', 'INSERT', 'UPDATE', 'DELETE', 'REPLACE'}:
+            kind = 'Data'
+        key = f'{start}:{end}:{len(statements)}'
+        rendered = ' '.join(value for _, value in tokens)
+        statements.append({'key': key, 'kind': kind, 'start_line': start, 'end_line': end, 'code': rendered, 'first_token': first})
+
+        # Local/parameter names are the only variable identities created here.
+        # Qualified names and fields are retained as uses with an unknown owner.
+        if first in {'LOCAL', 'PRIVATE', 'PUBLIC', 'LPARAMETERS', 'PARAMETERS'}:
+            for token_kind, value in tokens[1:]:
+                if token_kind == 'id' and value.upper() not in keywords:
+                    variables.append({'statement_key': key, 'name': value, 'kind': 'DECLARES', 'scope': 'lexical', 'line': start, 'confidence': 'observed'})
+
+        equals = next((i for i, (_, value) in enumerate(tokens) if value == '='), None)
+        if equals is not None and equals > 0 and tokens[0][0] == 'id':
+            variables.append({'statement_key': key, 'name': tokens[0][1], 'kind': 'WRITES', 'scope': 'lexical' if '.' not in tokens[0][1] else 'unknown_receiver', 'line': start, 'confidence': 'observed' if '.' not in tokens[0][1] else 'unresolved'})
+        skip = 1 if equals is not None else 0
+        for i, (token_kind, value) in enumerate(tokens):
+            if token_kind != 'id' or i == 0 and equals is not None or value.upper() in keywords or value.upper() in BUILTINS:
+                continue
+            # Routine/class declarations name symbols, rather than variable use.
+            if first in {'FUNCTION', 'PROCEDURE'} and i == 1:
+                continue
+            variables.append({'statement_key': key, 'name': value, 'kind': 'READS', 'scope': 'lexical' if '.' not in value else 'unknown_receiver', 'line': start, 'confidence': 'observed' if '.' not in value else 'unresolved'})
+
+        def literal_after(position):
+            if position + 1 >= len(tokens):
+                return '', 'unresolved'
+            token_kind, value = tokens[position + 1]
+            return value, 'observed' if token_kind in {'id', 'str'} else 'unresolved'
+
+        if first == 'USE':
+            name, confidence = literal_after(0)
+            data_accesses.append({'statement_key': key, 'name': name or '<computed>', 'operation': 'OPEN', 'line': start, 'confidence': confidence})
+        elif first == 'INSERT' and len(tokens) > 1 and tokens[1][1].upper() == 'INTO':
+            name, confidence = literal_after(1)
+            data_accesses.append({'statement_key': key, 'name': name or '<computed>', 'operation': 'INSERT', 'line': start, 'confidence': confidence})
+        elif first == 'UPDATE':
+            name, confidence = literal_after(0)
+            data_accesses.append({'statement_key': key, 'name': name or '<computed>', 'operation': 'UPDATE', 'line': start, 'confidence': confidence})
+        elif first == 'DELETE':
+            index = next((i for i, (_, value) in enumerate(tokens) if value.upper() == 'FROM'), None)
+            name, confidence = literal_after(index) if index is not None else ('<current-work-area>', 'unresolved')
+            data_accesses.append({'statement_key': key, 'name': name or '<computed>', 'operation': 'DELETE', 'line': start, 'confidence': confidence})
+        elif first == 'SELECT':
+            index = next((i for i, (_, value) in enumerate(tokens) if value.upper() == 'FROM'), None)
+            if index is not None:
+                name, confidence = literal_after(index)
+                data_accesses.append({'statement_key': key, 'name': name or '<computed>', 'operation': 'READ', 'line': start, 'confidence': confidence})
+        elif first == 'REPLACE':
+            data_accesses.append({'statement_key': key, 'name': '<current-work-area>', 'operation': 'UPDATE', 'line': start, 'confidence': 'unresolved'})
+
+    for lineno, line in enumerate(text.splitlines(), 1):
+        if text_start is not None:
+            if re.match(r'^\s*ENDTEXT\b', line, re.I):
+                text_start = None
+            continue
+        tokens = _tokens(line)
+        if not pending and tokens and tokens[0][0] == 'id' and tokens[0][1].upper() == 'TEXT':
+            text_start = lineno
+            continue
+        if not tokens:
+            continue
+        if not pending:
+            pending_start = lineno
+        continuation = tokens[-1][1] == ';'
+        pending.extend(tokens[:-1] if continuation else tokens)
+        if not continuation:
+            emit(pending_start, lineno, pending)
+            pending = []
+    if pending:
+        emit(pending_start, max(1, len(text.splitlines())), pending)
+        issues.append({'reason': 'Unterminated continuation in CPG extraction', 'start_line': pending_start})
+    if text_start is not None:
+        issues.append({'reason': 'Unterminated TEXT block in CPG extraction', 'start_line': text_start})
+
+    control_edges = []
+    for previous, current in zip(statements, statements[1:]):
+        if previous['kind'] != 'Terminal':
+            control_edges.append({'source_key': previous['key'], 'target_key': current['key'], 'kind': 'NEXT', 'confidence': 'lexical'})
+        if previous['first_token'] in {'IF', 'ELSEIF', 'FOR', 'WHILE', 'SCAN', 'DO'}:
+            control_edges.append({'source_key': previous['key'], 'target_key': current['key'], 'kind': 'BRANCH_OR_BODY', 'confidence': 'partial'})
+    return {'version': CPG_VERSION, 'statements': statements, 'variables': variables, 'data_accesses': data_accesses, 'control_edges': control_edges, 'issues': issues}

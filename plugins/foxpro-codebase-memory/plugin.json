@@ -1,8 +1,8 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "foxpro-codebase-memory",
-  "version": "0.1.0",
-  "description": "Local Visual FoxPro source graph with original-record provenance and explicit coverage gaps.",
+  "version": "0.2.0",
+  "description": "Local Visual FoxPro evidence graph with source, container, CPG and trace provenance.",
   "author": {
     "name": "Martin Porman"
   },
@@ -14,15 +14,15 @@
     "com.openai": {
       "interface": {
         "displayName": "FoxPro Codebase Memory",
-        "shortDescription": "Explore FoxPro source, objects and call relationships.",
-        "longDescription": "Indexes Visual FoxPro programs and binary form/class source into a local persistent graph with provenance and unresolved-reference reporting.",
+        "shortDescription": "Explore FoxPro source, objects, CPG layers and recovery evidence.",
+        "longDescription": "Indexes Visual FoxPro programs and binary source containers into a local evidence graph with syntax, partial control/data flow, extractor/trace provenance and unresolved-reference reporting.",
         "developerName": "Martin Porman",
         "category": "Productivity",
         "capabilities": ["Read"],
         "defaultPrompt": [
           "Index this Visual FoxPro source and show coverage.",
           "Trace this FoxPro method and show original evidence.",
-          "Map a FoxPro workflow before a TypeScript migration."
+          "Map a FoxPro workflow with its source, extractor and runtime evidence before a TypeScript migration."
         ]
       }
     }
