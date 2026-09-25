@@ -137,20 +137,24 @@ def build_index(source_root, db_path, project='joosep', extra_roots=None, eviden
                         db.execute('INSERT INTO issues VALUES(?,?,?,?,?,?,?)',(ident(uid,'issue',n),fid,uid,issue.get('start_line'),issue.get('end_line'),issue['reason'],js(issue)))
                         db.execute("UPDATE files SET status='partial' WHERE id=?",(fid,));files[fid]['status']='partial'
         # Index keys retain deployment provenance: resolution never crosses roots.
-        byfile={};byname={};programs={}
+        byfile={};byname={};programs={};files_by_root_path={};files_by_root_basename={}
         for s in symbols:
             byfile.setdefault(s['file_id'],[]).append(s)
             byname.setdefault(s['name'].casefold(),[]).append(s)
             if s['kind']=='Program':programs.setdefault(s['file_id'],[]).append(s)
+        for file_info in files.values():
+            files_by_root_path.setdefault(file_info['root'],{}).setdefault(file_info['path'].casefold(),[]).append(file_info)
+            files_by_root_basename.setdefault(file_info['root'],{}).setdefault(Path(file_info['path']).name.casefold(),[]).append(file_info)
         def path_candidates(ref,target,extensions):
             origin=files[ref['file_id']]; normalized=target.strip(' \"\'').replace('\\','/').casefold()
             if not normalized:return []
             wanted={normalized} if Path(normalized).suffix else {normalized+ext for ext in extensions}
             parent=Path(origin['path']).parent.as_posix();relative={str(Path(parent)/w).casefold() for w in wanted}
-            exact=[f for f in files.values() if f['root']==origin['root'] and f['path'].casefold() in relative]
-            if not exact:exact=[f for f in files.values() if f['root']==origin['root'] and f['path'].casefold() in wanted]
+            root_paths=files_by_root_path.get(origin['root'],{});root_basenames=files_by_root_basename.get(origin['root'],{})
+            exact=[f for candidate in relative for f in root_paths.get(candidate,[])]
+            if not exact:exact=[f for candidate in wanted for f in root_paths.get(candidate,[])]
             # basename fallback is restricted to a unique file within this root.
-            if not exact and '/' not in normalized:exact=[f for f in files.values() if f['root']==origin['root'] and Path(f['path']).name.casefold() in wanted]
+            if not exact and '/' not in normalized:exact=[f for candidate in wanted for f in root_basenames.get(Path(candidate).name.casefold(),[])]
             return exact
         for ref in pending:
             candidates=[];reason=ref.get('reason','');target=ref['target'];kind=ref['kind']
