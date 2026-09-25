@@ -35,6 +35,16 @@ def _sha256_bytes(data):
     return hashlib.sha256(data).hexdigest()
 
 
+def _read_claude_envelope(path):
+    raw=Path(path).read_bytes()
+    for encoding in ('utf-8-sig','utf-16'):
+        try:
+            return json.loads(raw.decode(encoding))
+        except (UnicodeDecodeError,json.JSONDecodeError):
+            pass
+    raise ValueError('Claude output is not valid UTF-8 or UTF-16 JSON')
+
+
 def create_review_plan(db_path, project, question, output_root, max_source_chars=20000, max_edges=250):
     """Queue every nonempty source unit and every graph edge exactly once."""
     max_source_chars=max(20000, min(int(max_source_chars), 1000000))
@@ -190,7 +200,7 @@ def collect_vm_review_chunk(plan_path, chunk_id, *, ssh_target, remote_root, mod
         local_result=Path(temporary)/'result.json'
         retrieved=subprocess.run(['scp',f'{ssh_target}:{remote_output}',str(local_result)],text=True,capture_output=True,timeout=120,check=False)
         if retrieved.returncode:raise RuntimeError('Unable to retrieve VM review result: '+(retrieved.stderr or retrieved.stdout).strip()[-1000:])
-        envelope=json.loads(local_result.read_text(encoding='utf-8-sig'))
+        envelope=_read_claude_envelope(local_result)
     content=envelope.get('result') if isinstance(envelope,dict) else None
     response=parse_model_content(content)
     manifest=review_manifest(response,artifact_path=str(Path(plan_path).expanduser().resolve()),artifact_sha256=plan['plan_sha256'],tool_version=model,question=plan['question'],known_node_ids=known)
@@ -221,7 +231,7 @@ def run_vm_review_chunk(plan_path, chunk_id, *, ssh_target, remote_root, dotenv_
         if completed.returncode:raise RuntimeError(f'VM Claude review failed for {chunk_id}: '+(completed.stderr or completed.stdout).strip()[-2000:])
         retrieved=subprocess.run(['scp',f'{ssh_target}:{remote_output}',str(local_result)],text=True,capture_output=True,timeout=120,check=False)
         if retrieved.returncode:raise RuntimeError('Unable to retrieve VM review result: '+(retrieved.stderr or retrieved.stdout).strip()[-1000:])
-        envelope=json.loads(local_result.read_text(encoding='utf-8-sig'))
+        envelope=_read_claude_envelope(local_result)
     content=envelope.get('result') if isinstance(envelope,dict) else None
     response=parse_model_content(content)
     manifest=review_manifest(response,artifact_path=str(plan_path),artifact_sha256=plan['plan_sha256'],tool_version=model,question=plan['question'],known_node_ids=known)

@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import sys
 
-VERSION = '0.4.1'
+VERSION = '0.4.2'
 PROTOCOLS = ('2024-11-05', '2025-03-26')
 STR = {'type': 'string'}
 PROJECT = {'type': 'string', 'pattern': '^[a-z0-9][a-z0-9_-]{0,63}$', 'default': 'joosep'}

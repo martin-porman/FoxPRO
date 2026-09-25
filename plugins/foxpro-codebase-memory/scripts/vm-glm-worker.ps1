@@ -6,6 +6,8 @@ param(
   [Parameter(Mandatory=$true)][string]$MaxBudgetUsd
 )
 $ErrorActionPreference = 'Stop'
+$gitBash = Join-Path $env:ProgramFiles 'Git\bin\bash.exe'
+if (Test-Path -LiteralPath $gitBash) { $env:CLAUDE_CODE_GIT_BASH_PATH = $gitBash }
 if (-not (Test-Path -LiteralPath $DotenvPath)) { throw "VM dotenv file not found: $DotenvPath" }
 Get-Content -LiteralPath $DotenvPath | ForEach-Object {
   $line = $_.Trim()
@@ -28,9 +30,20 @@ if (-not $env:ANTHROPIC_AUTH_TOKEN) { throw 'VM dotenv must define ZAI_API_KEY o
 if (-not (Get-Command claude.cmd -ErrorAction SilentlyContinue) -and -not (Get-Command claude -ErrorAction SilentlyContinue)) { throw 'Claude Code is not installed in the VM user account' }
 $prompt = Get-Content -LiteralPath $PromptFile -Raw
 $claudeModel = if ($Model -eq 'glm-5.3-flash') { 'sonnet' } else { $Model }
+$temporaryOutput = $OutputFile + '.stdout'
+$temporaryError = $OutputFile + '.stderr'
 try {
-  $prompt | & claude.cmd -p --no-session-persistence --output-format json --model $claudeModel --max-budget-usd $MaxBudgetUsd | Set-Content -LiteralPath $OutputFile -Encoding utf8
-  if ($LASTEXITCODE -ne 0) { throw "Claude Code failed with exit code $LASTEXITCODE" }
+  $ErrorActionPreference = 'Continue'
+  $prompt | & claude.cmd -p --output-format json --model $claudeModel 1> $temporaryOutput 2> $temporaryError
+  $exitCode = $LASTEXITCODE
+  $ErrorActionPreference = 'Stop'
+  if ($exitCode -ne 0) {
+    $detail = Get-Content -LiteralPath $temporaryError -Raw -ErrorAction SilentlyContinue
+    @{ is_error = $true; result = ('Claude Code failed with exit code ' + $exitCode + ': ' + $detail) } | ConvertTo-Json -Compress | Set-Content -LiteralPath $OutputFile -Encoding utf8
+  } else {
+    Move-Item -LiteralPath $temporaryOutput -Destination $OutputFile -Force
+  }
 } finally {
   Remove-Item -LiteralPath $PromptFile -Force -ErrorAction SilentlyContinue
+  Remove-Item -LiteralPath $temporaryOutput,$temporaryError -Force -ErrorAction SilentlyContinue
 }

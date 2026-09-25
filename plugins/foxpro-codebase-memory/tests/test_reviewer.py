@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from foxpro_memory.index import build_index
 from foxpro_memory.review import build_prompt, parse_model_content, review_manifest
-from foxpro_memory.reviewer import create_review_plan, install_vm_worker, review_plan_status, run_claude_review_chunk
+from foxpro_memory.reviewer import _read_claude_envelope, create_review_plan, install_vm_worker, review_plan_status, run_claude_review_chunk
 
 
 class ReviewerTests(unittest.TestCase):
@@ -63,6 +63,12 @@ class ReviewerTests(unittest.TestCase):
         self.assertEqual(commands[0][0],'ssh')
         self.assertEqual(commands[1][0],'scp')
         self.assertNotIn('ZAI_API_KEY',' '.join(' '.join(command) for command in commands))
+
+    def test_vm_collector_accepts_windows_utf16_json(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path=Path(temporary)/'result.json'
+            path.write_text('{"result":"ok"}',encoding='utf-16')
+            self.assertEqual(_read_claude_envelope(path),{'result':'ok'})
 
 
 if __name__=='__main__':

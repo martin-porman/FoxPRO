@@ -1,6 +1,6 @@
 {
   "name": "foxpro-codebase-memory",
-  "version": "0.4.1",
+  "version": "0.4.2",
   "description": "Local Visual FoxPro source graph with original-record provenance and explicit coverage gaps.",
   "author": {
     "name": "Martin Porman"
