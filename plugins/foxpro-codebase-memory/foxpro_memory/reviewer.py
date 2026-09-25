@@ -45,34 +45,37 @@ def _read_claude_envelope(path):
     raise ValueError('Claude output is not valid UTF-8 or UTF-16 JSON')
 
 
-def create_review_plan(db_path, project, question, output_root, max_source_chars=4000, max_edges=25):
+def create_review_plan(db_path, project, question, output_root, max_source_chars=4000, max_edges=25, max_nodes=50):
     """Queue every nonempty source unit and every graph edge exactly once."""
     # Model response time depends on the surrounding node metadata as well as
     # the source text.  Keep default slices small enough to recover and resume
     # reliably from a VM worker.
     max_source_chars=max(2000, min(int(max_source_chars), 1000000))
     max_edges=max(10, min(int(max_edges), 20000))
+    max_nodes=max(10, min(int(max_nodes), 1000))
     metadata=_read_metadata(db_path)
     if metadata.get('project') != project:
         raise ValueError('Review project does not match graph database metadata')
     with sqlite3.connect(db_path) as db:
         units=list(db.execute('SELECT id,length(source) FROM units ORDER BY file_id,unit_key'))
+        node_counts=dict(db.execute('SELECT unit_id,count(*) FROM graph_nodes WHERE unit_id IS NOT NULL GROUP BY unit_id'))
         edges=[row[0] for row in db.execute('SELECT id FROM graph_edges ORDER BY id')]
-    code_chunks=[];current=[];size=0;empty_units=0
+    code_chunks=[];current=[];size=0;nodes=0;empty_units=0
     for unit_id, length in units:
         if not length:
             empty_units+=1
             continue
-        if current and size + length > max_source_chars:
-            code_chunks.append(current);current=[];size=0
-        current.append(unit_id);size+=length
+        node_count=node_counts.get(unit_id,0)
+        if current and (size + length > max_source_chars or nodes + node_count > max_nodes):
+            code_chunks.append(current);current=[];size=0;nodes=0
+        current.append(unit_id);size+=length;nodes+=node_count
     if current:code_chunks.append(current)
     chunks=[]
     for index, unit_ids in enumerate(code_chunks, 1):
         chunks.append({'id':f'code-{index:05d}','kind':'code','unit_ids':unit_ids})
     for index in range(0,len(edges),max_edges):
         chunks.append({'id':f'links-{index//max_edges+1:05d}','kind':'links','edge_ids':edges[index:index+max_edges]})
-    plan={'schema_version':1,'project':project,'graph_path':str(Path(db_path).resolve()),'graph_fingerprint':metadata['graph_fingerprint'],'question':question,'max_source_chars':max_source_chars,'max_edges':max_edges,'coverage':{'units_total':len(units),'empty_units':empty_units,'nonempty_units':len(units)-empty_units,'graph_edges_total':len(edges),'code_chunks':len(code_chunks),'link_chunks':(len(edges)+max_edges-1)//max_edges},'chunks':chunks}
+    plan={'schema_version':1,'project':project,'graph_path':str(Path(db_path).resolve()),'graph_fingerprint':metadata['graph_fingerprint'],'question':question,'max_source_chars':max_source_chars,'max_edges':max_edges,'max_nodes':max_nodes,'coverage':{'units_total':len(units),'empty_units':empty_units,'nonempty_units':len(units)-empty_units,'graph_edges_total':len(edges),'code_chunks':len(code_chunks),'link_chunks':(len(edges)+max_edges-1)//max_edges},'chunks':chunks}
     encoded=_json(plan).encode('utf-8');plan['plan_sha256']=_sha256_bytes(encoded)
     root=Path(output_root).expanduser().resolve()/project/plan['plan_sha256']
     root.mkdir(parents=True,exist_ok=True)

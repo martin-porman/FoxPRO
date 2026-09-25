@@ -1,7 +1,7 @@
 {
   "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
   "name": "foxpro-codebase-memory",
-  "version": "0.4.4",
+  "version": "0.4.5",
   "description": "Local Visual FoxPro evidence graph with source, container, CPG and trace provenance.",
   "author": {
     "name": "Martin Porman"
