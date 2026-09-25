@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import sys
 
-VERSION = '0.3.1'
+VERSION = '0.3.2'
 PROTOCOLS = ('2024-11-05', '2025-03-26')
 STR = {'type': 'string'}
 PROJECT = {'type': 'string', 'pattern': '^[a-z0-9][a-z0-9_-]{0,63}$', 'default': 'joosep'}
@@ -91,7 +91,7 @@ def invoke(name, arguments):
         return build_index(args['source_root'], path, project=project, extra_roots=args.get('extra_roots'), evidence_paths=args.get('evidence_paths'))
     if name == 'create_llm_review_plan':
         if not path.is_file():raise ValueError('Project is not indexed: ' + project + '. Use index_repository first.')
-        return create_review_plan(path,project,args['question'],args.get('output_root',str(cache_root().parent/'reviews')),args.get('max_source_chars',400000),args.get('max_edges',5000))
+        return create_review_plan(path,project,args['question'],args.get('output_root',str(cache_root().parent/'reviews')),args.get('max_source_chars',20000),args.get('max_edges',250))
     if name == 'run_llm_review_chunk':
         return run_claude_review_chunk(args['plan_path'],args['chunk_id'],model=args.get('model','glm-5.3-flash'),max_budget_usd=args.get('max_budget_usd',0.25),timeout_seconds=args.get('timeout_seconds',900))
     if name == 'get_llm_review_status':

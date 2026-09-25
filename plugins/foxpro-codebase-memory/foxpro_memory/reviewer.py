@@ -31,7 +31,7 @@ def _sha256_bytes(data):
     return hashlib.sha256(data).hexdigest()
 
 
-def create_review_plan(db_path, project, question, output_root, max_source_chars=400000, max_edges=5000):
+def create_review_plan(db_path, project, question, output_root, max_source_chars=20000, max_edges=250):
     """Queue every nonempty source unit and every graph edge exactly once."""
     max_source_chars=max(20000, min(int(max_source_chars), 1000000))
     max_edges=max(100, min(int(max_edges), 20000))
