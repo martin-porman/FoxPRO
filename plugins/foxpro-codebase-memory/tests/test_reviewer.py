@@ -1,4 +1,5 @@
 import json
+import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -6,7 +7,7 @@ from unittest.mock import patch
 
 from foxpro_memory.index import build_index
 from foxpro_memory.review import build_prompt, parse_model_content, review_manifest
-from foxpro_memory.reviewer import create_review_plan, review_plan_status, run_claude_review_chunk
+from foxpro_memory.reviewer import create_review_plan, install_vm_worker, review_plan_status, run_claude_review_chunk
 
 
 class ReviewerTests(unittest.TestCase):
@@ -49,6 +50,19 @@ class ReviewerTests(unittest.TestCase):
             self.assertEqual(result['gap_count'],1)
             self.assertNotIn('Review request:',run.call_args.args[0])
             self.assertIn('Review request:',run.call_args.kwargs['input'])
+
+    def test_vm_worker_install_never_accepts_or_reads_a_credential(self):
+        with patch('foxpro_memory.reviewer.subprocess.run') as run:
+            run.side_effect=[
+                subprocess.CompletedProcess([],0,'',''),
+                subprocess.CompletedProcess([],0,'',''),
+            ]
+            result=install_vm_worker('win','C:/Users/user/foxpro-glm-worker')
+        self.assertEqual(result['runner_path'],'C:/Users/user/foxpro-glm-worker/run-review.ps1')
+        commands=[call.args[0] for call in run.call_args_list]
+        self.assertEqual(commands[0][0],'ssh')
+        self.assertEqual(commands[1][0],'scp')
+        self.assertNotIn('ZAI_API_KEY',' '.join(' '.join(command) for command in commands))
 
 
 if __name__=='__main__':

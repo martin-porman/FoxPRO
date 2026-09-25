@@ -7,7 +7,7 @@ from pathlib import Path
 import re
 import sys
 
-VERSION = '0.3.2'
+VERSION = '0.4.1'
 PROTOCOLS = ('2024-11-05', '2025-03-26')
 STR = {'type': 'string'}
 PROJECT = {'type': 'string', 'pattern': '^[a-z0-9][a-z0-9_-]{0,63}$', 'default': 'joosep'}
@@ -30,6 +30,11 @@ TOOLS = [
     tool('get_llm_review_status', 'Show every deterministic GLM review shard and whether its candidate-evidence manifest exists. This does not contact a provider.', {'project': PROJECT, 'plan_path': STR}, ('plan_path',)),
     tool('run_llm_review_chunk', 'Run one planned Claude Code / GLM review shard. It uses the caller-configured CLI credentials and writes an untrusted candidate-evidence manifest; it never promotes graph edges to observed.', {'project': PROJECT, 'plan_path': STR, 'chunk_id': STR, 'model': STR, 'max_budget_usd': {'type': 'number', 'minimum': 0.01, 'maximum': 10}, 'timeout_seconds': {'type': 'integer', 'minimum': 30, 'maximum': 1800}}, ('plan_path','chunk_id')),
     tool('run_llm_review_batch', 'Run up to 20 pending Claude Code / GLM review shards sequentially. Each shard has its own explicit maximum budget; use get_llm_review_status between batches. All output remains candidate evidence.', {'project': PROJECT, 'plan_path': STR, 'max_chunks': {'type': 'integer', 'minimum': 1, 'maximum': 20}, 'model': STR, 'max_budget_usd': {'type': 'number', 'minimum': 0.01, 'maximum': 10}, 'timeout_seconds': {'type': 'integer', 'minimum': 30, 'maximum': 1800}}, ('plan_path',)),
+    tool('install_llm_vm_worker', 'Install the credential-isolated Windows VM runner. It stores no credential; the VM runner loads its own dotenv file at execution time.', {'ssh_target': STR, 'remote_root': STR}, ('ssh_target','remote_root')),
+    tool('start_llm_review_vm_chunk', 'Start one GLM review shard as a detached isolated-VM job. The host uploads source only; API credentials remain in the VM dotenv file.', {'project': PROJECT, 'plan_path': STR, 'chunk_id': STR, 'ssh_target': STR, 'remote_root': STR, 'dotenv_path': STR, 'model': STR, 'max_budget_usd': {'type': 'number', 'minimum': 0.01, 'maximum': 10}}, ('plan_path','chunk_id','ssh_target','remote_root','dotenv_path')),
+    tool('collect_llm_review_vm_chunk', 'Collect a completed isolated-VM review job and convert its output into candidate evidence. Returns running until the result is ready.', {'project': PROJECT, 'plan_path': STR, 'chunk_id': STR, 'ssh_target': STR, 'remote_root': STR, 'model': STR}, ('plan_path','chunk_id','ssh_target','remote_root')),
+    tool('run_llm_review_vm_chunk', 'Run one planned GLM review shard in an isolated Windows VM. The host uploads code only; the VM loads its own dotenv and keeps the API key local.', {'project': PROJECT, 'plan_path': STR, 'chunk_id': STR, 'ssh_target': STR, 'remote_root': STR, 'dotenv_path': STR, 'model': STR, 'max_budget_usd': {'type': 'number', 'minimum': 0.01, 'maximum': 10}, 'timeout_seconds': {'type': 'integer', 'minimum': 30, 'maximum': 1800}}, ('plan_path','chunk_id','ssh_target','remote_root','dotenv_path')),
+    tool('run_llm_review_vm_batch', 'Run up to 20 pending review shards in an isolated Windows VM. Each shard has its own explicit maximum budget; candidates never become facts.', {'project': PROJECT, 'plan_path': STR, 'ssh_target': STR, 'remote_root': STR, 'dotenv_path': STR, 'max_chunks': {'type': 'integer', 'minimum': 1, 'maximum': 20}, 'model': STR, 'max_budget_usd': {'type': 'number', 'minimum': 0.01, 'maximum': 10}, 'timeout_seconds': {'type': 'integer', 'minimum': 30, 'maximum': 1800}}, ('plan_path','ssh_target','remote_root','dotenv_path')),
     tool('check_index_coverage', 'Inspect input files, extraction failures and parser gaps before relying on graph evidence.', {'project': PROJECT, 'paths': {'type': 'array', 'items': STR}, 'scopes': {'type': 'array', 'items': STR}}),
 ]
 
@@ -75,7 +80,7 @@ def invoke(name, arguments):
     args = validate(name, arguments)
     # Lazy import keeps initialize/tool discovery available even if an index is absent.
     from foxpro_memory.index import Graph, build_index
-    from foxpro_memory.reviewer import create_review_plan, review_plan_status, run_claude_review_batch, run_claude_review_chunk
+    from foxpro_memory.reviewer import collect_vm_review_chunk, create_review_plan, install_vm_worker, review_plan_status, run_claude_review_batch, run_claude_review_chunk, run_vm_review_batch, run_vm_review_chunk, start_vm_review_chunk
     if name == 'list_projects':
         results = []
         for path in sorted(cache_root().glob('*.sqlite')):
@@ -98,6 +103,16 @@ def invoke(name, arguments):
         return review_plan_status(args['plan_path'])
     if name == 'run_llm_review_batch':
         return run_claude_review_batch(args['plan_path'],max_chunks=args.get('max_chunks',1),model=args.get('model','glm-5.3-flash'),max_budget_usd=args.get('max_budget_usd',0.25),timeout_seconds=args.get('timeout_seconds',900))
+    if name == 'install_llm_vm_worker':
+        return install_vm_worker(args['ssh_target'],args['remote_root'])
+    if name == 'start_llm_review_vm_chunk':
+        return start_vm_review_chunk(args['plan_path'],args['chunk_id'],ssh_target=args['ssh_target'],remote_root=args['remote_root'],dotenv_path=args['dotenv_path'],model=args.get('model','glm-5.3-flash'),max_budget_usd=args.get('max_budget_usd',0.25))
+    if name == 'collect_llm_review_vm_chunk':
+        return collect_vm_review_chunk(args['plan_path'],args['chunk_id'],ssh_target=args['ssh_target'],remote_root=args['remote_root'],model=args.get('model','glm-5.3-flash'))
+    if name == 'run_llm_review_vm_chunk':
+        return run_vm_review_chunk(args['plan_path'],args['chunk_id'],ssh_target=args['ssh_target'],remote_root=args['remote_root'],dotenv_path=args['dotenv_path'],model=args.get('model','glm-5.3-flash'),max_budget_usd=args.get('max_budget_usd',0.25),timeout_seconds=args.get('timeout_seconds',900))
+    if name == 'run_llm_review_vm_batch':
+        return run_vm_review_batch(args['plan_path'],ssh_target=args['ssh_target'],remote_root=args['remote_root'],dotenv_path=args['dotenv_path'],max_chunks=args.get('max_chunks',1),model=args.get('model','glm-5.3-flash'),max_budget_usd=args.get('max_budget_usd',0.25),timeout_seconds=args.get('timeout_seconds',900))
     if not path.is_file():
         raise ValueError('Project is not indexed: ' + project + '. Use index_repository first.')
     graph = Graph(path)

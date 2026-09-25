@@ -48,7 +48,9 @@ class ServerIntegrationTests(unittest.TestCase):
         self.process.stdin.flush()
         tools = self.request('tools/list')['result']['tools']
         self.assertIn('get_code_snippet', {t['name'] for t in tools})
-        self.assertTrue({'query_graph', 'trace_graph', 'get_evidence'}.issubset({t['name'] for t in tools}))
+        names={t['name'] for t in tools}
+        self.assertTrue({'query_graph', 'trace_graph', 'get_evidence'}.issubset(names))
+        self.assertTrue({'install_llm_vm_worker', 'start_llm_review_vm_chunk', 'collect_llm_review_vm_chunk', 'run_llm_review_vm_chunk', 'run_llm_review_vm_batch'}.issubset(names))
         self.call('index_repository', {'source_root': str(self.source), 'project': 'fixture'})
         found = self.call('search_graph', {'project': 'fixture', 'query': 'addone'})
         self.assertEqual(found['total'], 1)

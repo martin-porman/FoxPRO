@@ -12,6 +12,12 @@ Use C-like pseudocode only inside a reviewer explanation when it makes control f
 
 Claude Code must already be configured with the Z.ai API key and Anthropic-compatible endpoint. No key is stored by this plugin.
 
+### Disposable Windows worker
+
+For recovery work, install the official Z.ai Coding Tool Helper and Claude Code inside a disposable Windows VM. Then call install_llm_vm_worker and run_llm_review_vm_chunk or run_llm_review_vm_batch. The host sends source shards to the VM and receives JSON results only. The VM runner reads ZAI_API_KEY or ANTHROPIC_AUTH_TOKEN from its own dotenv file, so the credential never enters the host MCP environment or graph.
+
+Use start_llm_review_vm_chunk to launch a longer job and collect_llm_review_vm_chunk to retrieve it later. This keeps the review process inside the VM even when a host tool call has a shorter time limit.
+
 The plugin is a companion to `codebase-memory-mcp`. It does not replace or modify the installed generic indexer.
 
 ## Indexed inputs

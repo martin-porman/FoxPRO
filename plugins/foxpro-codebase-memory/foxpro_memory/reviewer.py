@@ -4,6 +4,10 @@ import hashlib
 import json
 import sqlite3
 import subprocess
+import tempfile
+import uuid
+import tempfile
+import uuid
 from .review import SYSTEM_PROMPT, build_prompt, parse_model_content, review_manifest
 
 REVIEW_SCHEMA = {
@@ -130,3 +134,106 @@ def run_claude_review_batch(plan_path, *, max_chunks=1, model='glm-5.3-flash', m
     for chunk_id in pending:
         results.append(run_claude_review_chunk(plan_path,chunk_id,model=model,max_budget_usd=max_budget_usd,timeout_seconds=timeout_seconds))
     return {'results':results,'status':review_plan_status(plan_path)}
+
+
+def install_vm_worker(ssh_target, remote_root):
+    """Install a credential-isolated PowerShell runner into a Windows VM."""
+    scripts=Path(__file__).resolve().parents[1]/'scripts'
+    source=scripts/'vm-glm-worker.ps1';starter=scripts/'start-vm-glm-review.ps1'
+    if not source.is_file() or not starter.is_file():raise ValueError('VM worker scripts are missing from this plugin')
+    remote_root=remote_root.rstrip('/\\')
+    setup=['ssh',ssh_target,'powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-Command',f"New-Item -ItemType Directory -Force -Path '{remote_root}/inbox'; New-Item -ItemType Directory -Force -Path '{remote_root}/out'"]
+    completed=subprocess.run(setup,text=True,capture_output=True,timeout=60,check=False)
+    if completed.returncode:raise RuntimeError('Unable to create VM worker directories: '+(completed.stderr or completed.stdout).strip()[-1000:])
+    copied=subprocess.run(['scp',str(source),str(starter),f'{ssh_target}:{remote_root}/'],text=True,capture_output=True,timeout=60,check=False)
+    if copied.returncode:raise RuntimeError('Unable to copy VM worker script: '+(copied.stderr or copied.stdout).strip()[-1000:])
+    return {'ssh_target':ssh_target,'remote_root':remote_root,'runner_path':remote_root+'/run-review.ps1','starter_path':remote_root+'/start-vm-glm-review.ps1'}
+
+
+def _vm_review_request(plan_path, chunk_id):
+    plan_path=Path(plan_path).expanduser().resolve();plan=json.loads(plan_path.read_text())
+    chunk=next((item for item in plan['chunks'] if item['id']==chunk_id),None)
+    if chunk is None:raise ValueError('Review chunk not found')
+    graph_slice=_chunk_slice(plan,chunk);known={node['id'] for node in graph_slice['nodes']}
+    if not known:raise ValueError('Review chunk has no graph nodes')
+    request=build_prompt(graph_slice,plan['question']);request['chunk']={'id':chunk_id,'kind':chunk['kind'],'coverage_rule':'Review all supplied records. Return hypotheses and evidence gaps only.'}
+    return plan,chunk,known,SYSTEM_PROMPT+'\n\nReview request:\n'+json.dumps(request,ensure_ascii=False)
+
+
+def _vm_job_id(plan, chunk_id):
+    return plan['plan_sha256'][:16]+'-'+chunk_id
+
+
+def start_vm_review_chunk(plan_path, chunk_id, *, ssh_target, remote_root, dotenv_path, model='glm-5.3-flash', max_budget_usd=0.25):
+    """Start a VM-local Claude job and return before the model finishes."""
+    plan,chunk,known,prompt=_vm_review_request(plan_path,chunk_id)
+    remote_root=remote_root.rstrip('/\\');job_id=_vm_job_id(plan,chunk_id)
+    remote_prompt=remote_root+'/inbox/'+job_id+'.txt';remote_output=remote_root+'/out/'+job_id+'.json'
+    with tempfile.TemporaryDirectory(prefix='foxpro-glm-') as temporary:
+        local_prompt=Path(temporary)/'prompt.txt';local_prompt.write_text(prompt,encoding='utf-8')
+        copied=subprocess.run(['scp',str(local_prompt),f'{ssh_target}:{remote_prompt}'],text=True,capture_output=True,timeout=120,check=False)
+        if copied.returncode:raise RuntimeError('Unable to upload VM review shard: '+(copied.stderr or copied.stdout).strip()[-1000:])
+    command=['ssh',ssh_target,'powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',remote_root+'/start-vm-glm-review.ps1','-RunnerPath',remote_root+'/run-review.ps1','-PromptFile',remote_prompt,'-OutputFile',remote_output,'-DotenvPath',dotenv_path,'-Model',model,'-MaxBudgetUsd',str(max_budget_usd)]
+    started=subprocess.run(command,text=True,capture_output=True,timeout=60,check=False)
+    if started.returncode:raise RuntimeError('Unable to start VM review shard: '+(started.stderr or started.stdout).strip()[-1000:])
+    return {'job_id':job_id,'chunk_id':chunk_id,'state':'running','remote_output':remote_output,'executor':'credential-isolated-vm'}
+
+
+def collect_vm_review_chunk(plan_path, chunk_id, *, ssh_target, remote_root, model='glm-5.3-flash'):
+    """Collect a completed VM-local job without reading VM credentials."""
+    plan,chunk,known,prompt=_vm_review_request(plan_path,chunk_id)
+    remote_root=remote_root.rstrip('/\\');job_id=_vm_job_id(plan,chunk_id);remote_output=remote_root+'/out/'+job_id+'.json'
+    available=subprocess.run(['ssh',ssh_target,'powershell.exe','-NoProfile','-Command',f"if (Test-Path -LiteralPath '{remote_output}') {{ 'ready' }} else {{ 'pending' }}"],text=True,capture_output=True,timeout=30,check=False)
+    if available.returncode:raise RuntimeError('Unable to inspect VM review job: '+(available.stderr or available.stdout).strip()[-1000:])
+    if available.stdout.strip()!='ready':return {'job_id':job_id,'chunk_id':chunk_id,'state':'running','executor':'credential-isolated-vm'}
+    with tempfile.TemporaryDirectory(prefix='foxpro-glm-') as temporary:
+        local_result=Path(temporary)/'result.json'
+        retrieved=subprocess.run(['scp',f'{ssh_target}:{remote_output}',str(local_result)],text=True,capture_output=True,timeout=120,check=False)
+        if retrieved.returncode:raise RuntimeError('Unable to retrieve VM review result: '+(retrieved.stderr or retrieved.stdout).strip()[-1000:])
+        envelope=json.loads(local_result.read_text(encoding='utf-8-sig'))
+    content=envelope.get('result') if isinstance(envelope,dict) else None
+    response=parse_model_content(content)
+    manifest=review_manifest(response,artifact_path=str(Path(plan_path).expanduser().resolve()),artifact_sha256=plan['plan_sha256'],tool_version=model,question=plan['question'],known_node_ids=known)
+    manifest['details'].update({'review_chunk':chunk_id,'review_kind':chunk['kind'],'graph_project':plan['project'],'graph_fingerprint':plan['graph_fingerprint'],'executor':'credential-isolated-vm'})
+    output=Path(plan_path).expanduser().resolve().parent/'manifests';output.mkdir(exist_ok=True)
+    manifest_path=output/(chunk_id+'.json');manifest_path.write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
+    return {'job_id':job_id,'chunk_id':chunk_id,'state':'complete','manifest_path':str(manifest_path),'candidate_count':len(response.get('candidates',[])),'gap_count':len(response.get('gaps',[])),'model':model,'executor':'credential-isolated-vm'}
+
+
+def run_vm_review_chunk(plan_path, chunk_id, *, ssh_target, remote_root, dotenv_path, model='glm-5.3-flash', max_budget_usd=0.25, timeout_seconds=900):
+    """Run one review shard in a remote VM; API credentials never leave that VM."""
+    plan_path=Path(plan_path).expanduser().resolve();plan=json.loads(plan_path.read_text())
+    chunk=next((item for item in plan['chunks'] if item['id']==chunk_id),None)
+    if chunk is None:raise ValueError('Review chunk not found')
+    graph_slice=_chunk_slice(plan,chunk);known={node['id'] for node in graph_slice['nodes']}
+    if not known:raise ValueError('Review chunk has no graph nodes')
+    request=build_prompt(graph_slice,plan['question']);request['chunk']={'id':chunk_id,'kind':chunk['kind'],'coverage_rule':'Review all supplied records. Return hypotheses and evidence gaps only.'}
+    prompt=SYSTEM_PROMPT+'\n\nReview request:\n'+json.dumps(request,ensure_ascii=False)
+    remote_root=remote_root.rstrip('/\\');token=uuid.uuid4().hex
+    remote_prompt=remote_root+'/inbox/'+token+'.txt';remote_output=remote_root+'/out/'+token+'.json'
+    with tempfile.TemporaryDirectory(prefix='foxpro-glm-') as temporary:
+        local_prompt=Path(temporary)/'prompt.txt';local_result=Path(temporary)/'result.json'
+        local_prompt.write_text(prompt,encoding='utf-8')
+        copied=subprocess.run(['scp',str(local_prompt),f'{ssh_target}:{remote_prompt}'],text=True,capture_output=True,timeout=120,check=False)
+        if copied.returncode:raise RuntimeError('Unable to upload VM review shard: '+(copied.stderr or copied.stdout).strip()[-1000:])
+        command=['ssh',ssh_target,'powershell.exe','-NoProfile','-ExecutionPolicy','Bypass','-File',remote_root+'/run-review.ps1','-PromptFile',remote_prompt,'-OutputFile',remote_output,'-DotenvPath',dotenv_path,'-Model',model,'-MaxBudgetUsd',str(max_budget_usd)]
+        completed=subprocess.run(command,text=True,capture_output=True,timeout=int(timeout_seconds),check=False)
+        if completed.returncode:raise RuntimeError(f'VM Claude review failed for {chunk_id}: '+(completed.stderr or completed.stdout).strip()[-2000:])
+        retrieved=subprocess.run(['scp',f'{ssh_target}:{remote_output}',str(local_result)],text=True,capture_output=True,timeout=120,check=False)
+        if retrieved.returncode:raise RuntimeError('Unable to retrieve VM review result: '+(retrieved.stderr or retrieved.stdout).strip()[-1000:])
+        envelope=json.loads(local_result.read_text(encoding='utf-8-sig'))
+    content=envelope.get('result') if isinstance(envelope,dict) else None
+    response=parse_model_content(content)
+    manifest=review_manifest(response,artifact_path=str(plan_path),artifact_sha256=plan['plan_sha256'],tool_version=model,question=plan['question'],known_node_ids=known)
+    manifest['details'].update({'review_chunk':chunk_id,'review_kind':chunk['kind'],'graph_project':plan['project'],'graph_fingerprint':plan['graph_fingerprint'],'executor':'credential-isolated-vm'})
+    output=plan_path.parent/'manifests';output.mkdir(exist_ok=True)
+    manifest_path=output/(chunk_id+'.json');manifest_path.write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
+    return {'chunk_id':chunk_id,'manifest_path':str(manifest_path),'candidate_count':len(response.get('candidates',[])),'gap_count':len(response.get('gaps',[])),'model':model,'executor':'credential-isolated-vm'}
+
+
+def run_vm_review_batch(plan_path, *, ssh_target, remote_root, dotenv_path, max_chunks=1, model='glm-5.3-flash', max_budget_usd=0.25, timeout_seconds=900):
+    """Run pending review shards in a credential-isolated VM."""
+    max_chunks=max(1,min(int(max_chunks),20));status=review_plan_status(plan_path)
+    pending=[chunk['id'] for chunk in status['chunks'] if chunk['state']=='pending'][:max_chunks]
+    results=[run_vm_review_chunk(plan_path,chunk_id,ssh_target=ssh_target,remote_root=remote_root,dotenv_path=dotenv_path,model=model,max_budget_usd=max_budget_usd,timeout_seconds=timeout_seconds) for chunk_id in pending]
+    return {'results':results,'status':review_plan_status(plan_path),'executor':'credential-isolated-vm'}

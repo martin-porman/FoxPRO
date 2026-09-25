@@ -19,6 +19,8 @@ Indexing reads sources and writes only the selected index/cache location. Keep c
 
 For TypeScript work, use the VFP graph to select a bounded workflow and find its dependencies. Establish behavior fixtures against a trusted legacy run before replacing business logic; then use ordinary codebase-memory for the new TypeScript code. Do not fabricate TypeScript wrappers simply to make the old source indexable.
 
+For Joosep recovery, prefer the isolated VM reviewer tools: install_llm_vm_worker, run_llm_review_vm_chunk, and run_llm_review_vm_batch. The Z.ai key must exist only in the VM dotenv file. Do not read it, return it, or set it in the host environment.
+
 When a whole-graph explanation pass is needed, call `create_llm_review_plan`, inspect `get_llm_review_status`, then use `run_llm_review_chunk` or the resumable 20-shard `run_llm_review_batch`. Those calls use the local `claude -p` configuration and default to `glm-5.3-flash`; code in each selected shard is sent to that configured provider. Review output is imported only as candidate or unresolved evidence, never as a proven relationship. A C-like description may help explain control flow, but the canonical source remains VFP evidence and the migration target remains TypeScript.
 
 If the MCP tools have not appeared after installation, start a new task or use the plugin's documented local CLI to query the same persisted database.
